@@ -1,101 +1,64 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { FaMicrophone } from 'react-icons/fa';
-import './App.css';
+import React, { useState, useRef, useEffect } from "react";
+import { FaMicrophone } from "react-icons/fa";
+import "./App.css";
 
 function App() {
   const [recording, setRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const analyserRef = useRef(null);
-  const audioChunksRef = useRef([]); // Use a ref to store audio chunks
-  const [volume, setVolume] = useState(0);
+  const audioChunksRef = useRef([]);
+  const [socket, setSocket] = useState(null);
+  const [transcription, setTranscription] = useState("");
 
   useEffect(() => {
-    if (recording) {
-      const updateVolume = () => {
-        if (analyserRef.current) {
-          const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-          analyserRef.current.getByteFrequencyData(dataArray);
-          const volume = dataArray.reduce((a, b) => a + b) / dataArray.length;
-          setVolume(volume);
-        }
-        if (recording) {
-          requestAnimationFrame(updateVolume);
-        }
-      };
-      updateVolume();
-    }
-  }, [recording]);
+    // Establish WebSocket connection to the server
+    const ws = new WebSocket("ws://10.0.0.21:443/transcribe");
+    setSocket(ws);
 
-  useEffect(() => {
-    const handleGlobalMouseUp = () => {
-      if (recording) stopRecording();
+    ws.onopen = () => console.log("WebSocket connected");
+
+    ws.onmessage = (event) => {
+      console.log("Transcription received:", event.data);
+      setTranscription(event.data);
     };
 
-    document.addEventListener('mouseup', handleGlobalMouseUp);
-    document.addEventListener('touchend', handleGlobalMouseUp);
+    ws.onclose = () => console.log("WebSocket closed");
 
-    return () => {
-      document.removeEventListener('mouseup', handleGlobalMouseUp);
-      document.removeEventListener('touchend', handleGlobalMouseUp);
-    };
-  }, [recording]);
+    return () => ws.close();
+  }, []);
 
   const startRecording = () => {
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then((stream) => {
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const analyser = audioContext.createAnalyser();
-        const source = audioContext.createMediaStreamSource(stream);
-        source.connect(analyser);
-        analyser.fftSize = 256;
-        audioContextRef.current = audioContext;
-        analyserRef.current = analyser;
-
-        const mediaRecorder = new MediaRecorder(stream);
+        const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
         mediaRecorderRef.current = mediaRecorder;
-        audioChunksRef.current = []; // Reset audio chunks
-
-        mediaRecorder.start();
-        setRecording(true);
+        audioChunksRef.current = [];
 
         mediaRecorder.ondataavailable = (event) => {
           audioChunksRef.current.push(event.data);
         };
 
         mediaRecorder.onstop = () => {
-          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-          const audioUrl = URL.createObjectURL(audioBlob);
-
-          // Play back the recording
-          const audio = new Audio(audioUrl);
-          audio.play();
-
-          // Trigger a download for the recording
-          const downloadLink = document.createElement('a');
-          downloadLink.href = audioUrl;
-          downloadLink.download = `recording-${Date.now()}.webm`;
-          document.body.appendChild(downloadLink);
-          downloadLink.click();
-          document.body.removeChild(downloadLink);
-
-          console.log('Recorded message saved as:', downloadLink.download);
-
-          // Clean up resources
-          audioContextRef.current.close();
-          audioContextRef.current = null;
+          const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const buffer = reader.result;
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              socket.send(buffer); // Send raw binary data to WebSocket
+            }
+          };
+          reader.readAsArrayBuffer(audioBlob);
         };
+
+        mediaRecorder.start();
+        setRecording(true);
       })
-      .catch((error) => {
-        console.error('Error accessing microphone:', error);
-      });
+      .catch((error) => console.error("Error accessing microphone:", error));
   };
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && recording) {
       mediaRecorderRef.current.stop();
       setRecording(false);
-      setVolume(0); // Reset volume
     }
   };
 
@@ -103,14 +66,14 @@ function App() {
     <div className="App">
       <button
         onMouseDown={startRecording}
+        onMouseUp={stopRecording}
         onTouchStart={startRecording}
-        className={recording ? 'recording' : ''}
-        style={{
-          boxShadow: recording ? `0 0 ${volume}px ${volume / 2}px rgba(97, 218, 251, 0.7)` : 'none'
-        }}
+        onTouchEnd={stopRecording}
+        className={recording ? "recording" : ""}
       >
         <FaMicrophone />
       </button>
+      <p>Transcription: {transcription}</p>
     </div>
   );
 }
