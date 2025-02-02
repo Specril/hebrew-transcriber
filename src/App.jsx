@@ -1,6 +1,32 @@
 import React, { useState, useRef, useEffect } from "react";
 import { FaMicrophone } from "react-icons/fa";
+import { initializeApp } from 'firebase/app';
+import { getFirestore, doc, getDoc } from 'firebase/firestore';
 import "./App.css";
+import cfg from "./cfg.json";
+
+const firebaseConfig = cfg;
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+const PASSWORD = cfg.password;
+
+const fetchNgrokUrl = async () => {
+  try {
+    const docRef = doc(db, "ngrokUrls", "current");
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists() && docSnap.data()?.url) {
+      return `wss:/${docSnap.data().url}/transcribe`;
+    } else {
+      console.error("No ngrok URL found in Firestore.");
+    }
+  } catch (error) {
+    console.error("Error fetching ngrok URL:", error);
+  }
+  return "";
+};
+
 
 function App() {
   const [recording, setRecording] = useState(false);
@@ -8,15 +34,25 @@ function App() {
   const audioChunksRef = useRef([]);
   const [socket, setSocket] = useState(null);
   const [transcription, setTranscription] = useState("");
-  const PASSWORD = "tomer"; // Replace with actual password
+  const [webSocketUrl, setWebSocketUrl] = useState("");
 
   useEffect(() => {
-    // Correct WebSocket URL format
-    const ws = new WebSocket("wss://1846-2a06-c701-c650-8a00-7957-4e41-f6ff-97d2.ngrok-free.app/transcribe");
+    const getWebSocketUrl = async () => {
+      const url = await fetchNgrokUrl();
+      if (url) setWebSocketUrl(url);
+    };
+    getWebSocketUrl();
+  }, []);
+
+  useEffect(() => {
+    if (!webSocketUrl) return;
+
+    console.log("Initializing WebSocket...");
+    const ws = new WebSocket(webSocketUrl);
 
     ws.onopen = () => {
       console.log("WebSocket connected");
-      ws.send(PASSWORD); // Send password for authentication
+      ws.send(PASSWORD);
     };
 
     ws.onmessage = (event) => {
@@ -27,15 +63,13 @@ function App() {
     ws.onerror = (error) => console.error("WebSocket error:", error);
 
     ws.onclose = () => {
-      console.log("WebSocket closed, attempting to reconnect...");
-      setTimeout(() => {
-        setSocket(new WebSocket("wss://a779-2a06-c701-c650-8a00-7957-4e41-f6ff-97d2.ngrok-free.app/transcribe"));
-      }, 3000);
+      console.log("WebSocket closed. Reconnecting...");
+      setTimeout(() => setSocket(new WebSocket(webSocketUrl)), 3000);
     };
 
     setSocket(ws);
     return () => ws.close();
-  }, []);
+  }, [webSocketUrl]);
 
   const startRecording = async () => {
     try {
